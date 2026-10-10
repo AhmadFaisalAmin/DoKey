@@ -5,12 +5,12 @@ Two-player keyboard-to-Xbox-controller mapper.
 Supports English and Dari (دری) with proper RTL rendering.
 """
 
-import sys, os, subprocess, importlib.util, threading, time, tempfile
+import sys, os, subprocess, importlib, importlib.util, threading, time, tempfile
 import urllib.request, ctypes, queue, traceback, gc, zipfile, shutil, struct
 import json
 
 # =====================================================================
-#  STAGE 1 — Python packages
+#  STAGE 1 — Python packages (bullet-proof auto-installer)
 # =====================================================================
 
 REQUIRED_PACKAGES = {
@@ -20,47 +20,180 @@ REQUIRED_PACKAGES = {
     "bidi":            "python-bidi",
 }
 
+# Packages that MUST be present for DoKey to function at all.
+CORE_PACKAGES = {"customtkinter", "vgamepad"}
+# Packages that are only needed for right-to-left Dari text rendering.
+# If these fail, DoKey still works, just without RTL shaping.
+RTL_PACKAGES  = {"arabic_reshaper", "bidi"}
+
 def _pip_ok():
+    """Return True if `python -m pip --version` responds."""
     try:
         subprocess.check_call(
             [sys.executable, "-m", "pip", "--version"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=30)
         return True
     except Exception:
         return False
 
-def _pip_install(name):
-    for cmd in (
-        [sys.executable, "-m", "pip", "install", "--user", name],
-        [sys.executable, "-m", "pip", "install", name],
-        [sys.executable, "-m", "pip", "install", "--no-cache-dir", name],
-    ):
+def _bootstrap_pip_if_needed():
+    """If pip is missing entirely, try to install it via ensurepip."""
+    if _pip_ok():
+        return True
+    print("[DoKey] pip is not available — attempting to bootstrap it ...")
+    for args in (["--default-pip"], ["--user"], []):
         try:
-            subprocess.check_call(cmd, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.STDOUT)
-            return True
-        except subprocess.CalledProcessError:
-            pass
+            subprocess.check_call(
+                [sys.executable, "-m", "ensurepip"] + args,
+                stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                timeout=180)
+            if _pip_ok():
+                print("[DoKey] pip bootstrapped successfully.")
+                return True
+        except Exception:
+            continue
+    print("[DoKey] Could not bootstrap pip.")
     return False
 
+def _pip_run(args, timeout=600):
+    """Run `python -m pip <args>`. Returns True on success."""
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip"] + list(args),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+            timeout=timeout)
+        return True
+    except Exception:
+        return False
+
+def _upgrade_pip():
+    """Upgrade pip (and setuptools/wheel) using several strategies."""
+    strategies = [
+        ["install", "--upgrade", "--disable-pip-version-check",
+         "pip", "setuptools", "wheel"],
+        ["install", "--upgrade", "--user", "--disable-pip-version-check",
+         "pip", "setuptools", "wheel"],
+        ["install", "--upgrade", "--no-cache-dir", "--disable-pip-version-check",
+         "pip", "setuptools", "wheel"],
+        ["install", "--upgrade", "--user", "--no-cache-dir",
+         "--disable-pip-version-check", "pip", "setuptools", "wheel"],
+        # Minimal fallbacks in case setuptools/wheel cannot install
+        ["install", "--upgrade", "--disable-pip-version-check", "pip"],
+        ["install", "--upgrade", "--user",
+         "--disable-pip-version-check", "pip"],
+    ]
+    for s in strategies:
+        if _pip_run(s):
+            return True
+    return False
+
+def _pip_install_package(pip_name):
+    """Try many pip strategies. Returns True if pip returned success."""
+    strategies = [
+        ["install", "--upgrade", "--disable-pip-version-check", pip_name],
+        ["install", "--upgrade", "--user", "--disable-pip-version-check", pip_name],
+        ["install", "--upgrade", "--no-cache-dir", "--disable-pip-version-check", pip_name],
+        ["install", "--upgrade", "--user", "--no-cache-dir",
+         "--disable-pip-version-check", pip_name],
+        ["install", "--disable-pip-version-check", pip_name],
+        ["install", "--user", "--disable-pip-version-check", pip_name],
+        ["install", "--no-cache-dir", "--disable-pip-version-check", pip_name],
+        ["install", pip_name],
+    ]
+    for s in strategies:
+        if _pip_run(s):
+            return True
+    return False
+
+def _verify_import(module_name):
+    """Clear caches and re-check whether the module is importable."""
+    try:
+        importlib.invalidate_caches()
+    except Exception:
+        pass
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except Exception:
+        return False
+
 def ensure_python_packages():
-    if not _pip_ok():
-        print("[DoKey] pip unavailable for this Python interpreter.")
+    # ---- 1. Make sure pip exists (bootstrap if missing) ----
+    if not _bootstrap_pip_if_needed():
+        print()
+        print("=" * 70)
+        print("[DoKey] ERROR: pip is not available and could not be installed.")
+        print("[DoKey] Please reinstall Python from python.org and make sure")
+        print("[DoKey] 'pip' is checked in the installer.")
+        print("=" * 70)
+        input("Press Enter to exit...")
         sys.exit(1)
+
+    # ---- 2. Upgrade pip / setuptools / wheel (best effort) ----
+    print("[DoKey] Updating pip, setuptools, wheel ...")
+    if _upgrade_pip():
+        print("[DoKey]   pip is up to date.")
+    else:
+        print("[DoKey]   pip upgrade failed (continuing with current pip).")
+
+    # ---- 3. Figure out which packages are missing ----
     missing = [(m, p) for m, p in REQUIRED_PACKAGES.items()
-               if importlib.util.find_spec(m) is None]
+               if not _verify_import(m)]
     if not missing:
+        print("[DoKey] All required packages are already installed.")
         return
-    print(f"[DoKey] Installing: {[p for _, p in missing]}")
+
+    print(f"[DoKey] Missing packages: {[p for _, p in missing]}")
+    print("[DoKey] Installing them now — this may take a minute ...")
+
+    # ---- 4. Install each missing package ----
     failed = []
-    for _, pip_name in missing:
-        print(f"[DoKey]   {pip_name} ...", end=" ", flush=True)
-        ok = _pip_install(pip_name)
-        print("OK" if ok else "FAILED")
-        if not ok:
-            failed.append(pip_name)
-    if failed:
-        print(f"[DoKey] Failed: {failed}")
+    for module_name, pip_name in missing:
+        print(f"[DoKey]   Installing {pip_name} ...", end=" ", flush=True)
+        ok_pip = _pip_install_package(pip_name)
+        # Verify both: pip returned success AND import actually resolves
+        if ok_pip and _verify_import(module_name):
+            print("OK")
+        else:
+            # Even if pip said OK, double-check import one more time
+            if _verify_import(module_name):
+                print("OK")
+            else:
+                print("FAILED")
+                failed.append((module_name, pip_name))
+
+    # ---- 5. Decide whether it's fatal ----
+    core_failed = [(m, p) for m, p in failed if m in CORE_PACKAGES]
+    rtl_failed  = [(m, p) for m, p in failed if m in RTL_PACKAGES]
+
+    if rtl_failed and not core_failed:
+        # DoKey still runs — only RTL shaping is lost
+        print()
+        print("=" * 70)
+        print("[DoKey] WARNING: RTL support packages could not be installed:")
+        for _, p in rtl_failed:
+            print(f"   - {p}")
+        print("[DoKey] DoKey will still run, but Dari text may display")
+        print("[DoKey] in the wrong order. Install them manually with:")
+        print(f"   {sys.executable} -m pip install "
+              f"{' '.join(p for _, p in rtl_failed)}")
+        print("=" * 70)
+
+    if core_failed:
+        print()
+        print("=" * 70)
+        print("[DoKey] ERROR: Required packages could not be installed:")
+        for _, p in core_failed:
+            print(f"   - {p}")
+        print()
+        print("[DoKey] Please install them manually by running:")
+        print(f"   {sys.executable} -m pip install "
+              f"{' '.join(p for _, p in core_failed)}")
+        print()
+        print("[DoKey] If you are on Python 3.14+, try Python 3.12 or 3.13.")
+        print("=" * 70)
+        input("Press Enter to exit...")
         sys.exit(1)
 
 # =====================================================================
@@ -275,9 +408,7 @@ def _reshape_rtl(s):
     if _ar_reshaper is None or _bidi_get_display is None:
         return s
     try:
-        # Step 1: convert isolated letter forms into their joined forms
         reshaped = _ar_reshaper.reshape(s)
-        # Step 2: apply the Unicode BiDi algorithm for correct visual order
         return _bidi_get_display(reshaped)
     except Exception:
         return s
