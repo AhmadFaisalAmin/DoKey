@@ -2,7 +2,7 @@
 """
 DoKey — دو کلید
 Two-player keyboard-to-Xbox-controller mapper.
-Supports English and Dari (دری) interface languages.
+Supports English and Dari (دری) with proper RTL rendering.
 """
 
 import sys, os, subprocess, importlib.util, threading, time, tempfile
@@ -14,8 +14,10 @@ import json
 # =====================================================================
 
 REQUIRED_PACKAGES = {
-    "customtkinter": "customtkinter",
-    "vgamepad":      "vgamepad",
+    "customtkinter":   "customtkinter",
+    "vgamepad":        "vgamepad",
+    "arabic_reshaper": "arabic-reshaper",
+    "bidi":            "python-bidi",
 }
 
 def _pip_ok():
@@ -154,12 +156,11 @@ STRINGS = {
         "dlg_ok":              "OK",
         "dlg_yes":             "Yes",
         "dlg_no":              "No",
-        "dlg_confirm":         "Confirm",
     },
     "fa": {
         "app_title":       "DoKey — دو کلید",
         "app_name":        "⚡ دو کلید",
-        "app_subtitle":    "تقسیم‌کننده کیبورد دو نفره برای کنترولر Xbox",
+        "app_subtitle":    "Xbox تقسیم کننده کیبود دو نفره برای کنترولر ",
 
         "tab_p1":          "بازیکن ۱",
         "tab_p2":          "بازیکن ۲",
@@ -244,24 +245,63 @@ STRINGS = {
         "dlg_ok":              "تأیید",
         "dlg_yes":             "بله",
         "dlg_no":              "خیر",
-        "dlg_confirm":         "تأیید",
     },
 }
 
 _current_lang = "en"
 
-def t(key, **kwargs):
-    """Translate a key to the current language. Falls back to English."""
+# =====================================================================
+#  RTL reshaping (arabic_reshaper + python-bidi)
+# =====================================================================
+
+_ar_reshaper = None
+_bidi_get_display = None
+try:
+    import arabic_reshaper as _ar
+    from bidi.algorithm import get_display as _gd
+    _ar_reshaper = _ar
+    _bidi_get_display = _gd
+except Exception as _e:
+    print(f"[DoKey] RTL libraries not available: {_e}")
+
+def _reshape_rtl(s):
+    """
+    Transform a Persian/Arabic string so Tk displays it with correct
+    right-to-left ordering. Returns s unchanged for other languages
+    or if the RTL libraries aren't loaded.
+    """
+    if not s or _current_lang != "fa":
+        return s
+    if _ar_reshaper is None or _bidi_get_display is None:
+        return s
+    try:
+        # Step 1: convert isolated letter forms into their joined forms
+        reshaped = _ar_reshaper.reshape(s)
+        # Step 2: apply the Unicode BiDi algorithm for correct visual order
+        return _bidi_get_display(reshaped)
+    except Exception:
+        return s
+
+def _translate_raw(key, **kwargs):
+    """Translate without RTL reshaping (for OS-native contexts)."""
     table = STRINGS.get(_current_lang, STRINGS["en"])
     s = table.get(key)
     if s is None:
         s = STRINGS["en"].get(key, key)
     if kwargs:
         try:
-            return s.format(**kwargs)
+            s = s.format(**kwargs)
         except Exception:
-            return s
+            pass
     return s
+
+def t(key, **kwargs):
+    """Translate and reshape for display in Tk widgets."""
+    return _reshape_rtl(_translate_raw(key, **kwargs))
+
+def t_raw(key, **kwargs):
+    """Translate without reshaping (window title, file paths, etc.)."""
+    return _translate_raw(key, **kwargs)
 
 def set_lang(lang):
     global _current_lang
@@ -272,14 +312,13 @@ def set_lang(lang):
 #  Paths, migration, config
 # =====================================================================
 
-LOCALAPPDATA = os.environ.get("LOCALAPPDATA", tempfile.gettempdir())
-OLD_APP_DIR  = os.path.join(LOCALAPPDATA, "KeyForge")
+LOCALAPPDATA  = os.environ.get("LOCALAPPDATA", tempfile.gettempdir())
+OLD_APP_DIR   = os.path.join(LOCALAPPDATA, "KeyForge")
 LOCAL_APP_DIR = os.path.join(LOCALAPPDATA, "DoKey")
 INTERCEPTION_DIR = os.path.join(LOCAL_APP_DIR, "interception")
 LAYOUTS_DIR      = os.path.join(LOCAL_APP_DIR, "layouts")
 CONFIG_FILE      = os.path.join(LOCAL_APP_DIR, "config.json")
 
-# Migrate existing KeyForge data → DoKey once
 try:
     if os.path.isdir(OLD_APP_DIR) and not os.path.isdir(LOCAL_APP_DIR):
         shutil.move(OLD_APP_DIR, LOCAL_APP_DIR)
@@ -300,7 +339,6 @@ IC_KEY_E0   = 0x02
 IC_KEY_E1   = 0x04
 
 INTERCEPTION_FILTER_KEY_ALL = 0xFFFF
-
 MAPVK_VSC_TO_VK_EX = 3
 
 _user32 = ctypes.windll.user32
@@ -520,7 +558,6 @@ def ensure_interception(skip=False):
         urllib.request.urlretrieve(INTERCEPTION_URL, zip_path)
     except Exception as e:
         print(f"[DoKey] Download failed: {e}")
-        print(f"[DoKey] Manual URL: {INTERCEPTION_URL}")
         return None
 
     try:
@@ -968,7 +1005,7 @@ class InterceptionListener(threading.Thread):
         self.stop_flag.set()
 
 # =====================================================================
-#  Palette
+#  Palette and font sizes
 # =====================================================================
 
 P = {
@@ -990,17 +1027,38 @@ P = {
     "warn":          "#f39c12",
 }
 
+# Centralized font sizes (bumped up for readability)
+FS = {
+    "app_name":      30,
+    "app_subtitle":  13,
+    "badge":         14,
+    "lang":          14,
+    "tab":           15,
+    "btn_main":      16,
+    "card_title":    15,
+    "card_text":     14,
+    "card_small":    13,
+    "section_big":   22,
+    "body":          15,
+    "col_header":    13,
+    "control":       15,
+    "bound_key":     14,
+    "row_btn":       14,
+    "status":        13,
+    "dialog":        15,
+    "dialog_btn":    14,
+}
+
 # =====================================================================
 #  Dialogs
 # =====================================================================
 
 class NameDialog(ctk.CTkToplevel):
-    """Simple modal dialog with a text entry, OK and Cancel buttons."""
     def __init__(self, parent, title, prompt, initial=""):
         super().__init__(parent)
         self.result = None
         self.title(title)
-        self.geometry("440x200")
+        self.geometry("500x220")
         self.resizable(False, False)
         self.configure(fg_color=P["bg"])
 
@@ -1011,15 +1069,15 @@ class NameDialog(ctk.CTkToplevel):
             pass
 
         wrap = ctk.CTkFrame(self, fg_color=P["bg"])
-        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+        wrap.pack(fill="both", expand=True, padx=24, pady=24)
 
         ctk.CTkLabel(wrap, text=prompt,
-                     font=ctk.CTkFont(size=13),
+                     font=ctk.CTkFont(size=FS["dialog"]),
                      text_color=P["text"],
-                     justify="center").pack(pady=(0, 12))
+                     justify="center").pack(pady=(0, 14))
 
         self.entry = ctk.CTkEntry(
-            wrap, height=36, font=ctk.CTkFont(size=13),
+            wrap, height=40, font=ctk.CTkFont(size=FS["dialog"]),
             fg_color=P["panel"], border_color=P["border"],
             text_color=P["text"])
         self.entry.pack(fill="x")
@@ -1028,16 +1086,18 @@ class NameDialog(ctk.CTkToplevel):
         self.entry.focus_set()
 
         btns = ctk.CTkFrame(wrap, fg_color="transparent")
-        btns.pack(fill="x", pady=(16, 0))
+        btns.pack(fill="x", pady=(18, 0))
 
         ctk.CTkButton(btns, text=t("btn_cancel"), command=self._cancel,
                       fg_color=P["panel"], hover_color=P["card_hover"],
                       text_color=P["text"],
-                      width=100, height=36).pack(side="right", padx=(8, 0))
+                      font=ctk.CTkFont(size=FS["dialog_btn"]),
+                      width=110, height=40).pack(side="right", padx=(8, 0))
         ctk.CTkButton(btns, text=t("dlg_ok"), command=self._ok,
                       fg_color=P["accent"], hover_color=P["accent_hover"],
                       text_color=P["text"],
-                      width=100, height=36).pack(side="right")
+                      font=ctk.CTkFont(size=FS["dialog_btn"]),
+                      width=110, height=40).pack(side="right")
 
         self.entry.bind("<Return>", lambda e: self._ok())
         self.bind("<Escape>", lambda e: self._cancel())
@@ -1057,12 +1117,11 @@ class NameDialog(ctk.CTkToplevel):
         self.destroy()
 
 class ConfirmDialog(ctk.CTkToplevel):
-    """Simple modal yes/no dialog."""
     def __init__(self, parent, title, message):
         super().__init__(parent)
         self.result = False
         self.title(title)
-        self.geometry("440x200")
+        self.geometry("500x220")
         self.resizable(False, False)
         self.configure(fg_color=P["bg"])
 
@@ -1073,25 +1132,27 @@ class ConfirmDialog(ctk.CTkToplevel):
             pass
 
         wrap = ctk.CTkFrame(self, fg_color=P["bg"])
-        wrap.pack(fill="both", expand=True, padx=20, pady=20)
+        wrap.pack(fill="both", expand=True, padx=24, pady=24)
 
         ctk.CTkLabel(wrap, text=message,
-                     font=ctk.CTkFont(size=13),
+                     font=ctk.CTkFont(size=FS["dialog"]),
                      text_color=P["text"],
                      justify="center",
-                     wraplength=380).pack(expand=True)
+                     wraplength=420).pack(expand=True)
 
         btns = ctk.CTkFrame(wrap, fg_color="transparent")
-        btns.pack(fill="x", pady=(12, 0))
+        btns.pack(fill="x", pady=(14, 0))
 
         ctk.CTkButton(btns, text=t("dlg_no"), command=self._no,
                       fg_color=P["panel"], hover_color=P["card_hover"],
                       text_color=P["text"],
-                      width=110, height=36).pack(side="right", padx=(8, 0))
+                      font=ctk.CTkFont(size=FS["dialog_btn"]),
+                      width=120, height=40).pack(side="right", padx=(8, 0))
         ctk.CTkButton(btns, text=t("dlg_yes"), command=self._yes,
                       fg_color=P["danger"], hover_color=P["danger_hover"],
                       text_color=P["text"],
-                      width=110, height=36).pack(side="right")
+                      font=ctk.CTkFont(size=FS["dialog_btn"]),
+                      width=120, height=40).pack(side="right")
 
         self.bind("<Escape>", lambda e: self._no())
 
@@ -1138,6 +1199,7 @@ class DoKeyApp(ctk.CTk):
         self.binding_control = None
 
         self.current_layout_name = None
+        self._layout_display_map = {}  # displayed -> real name (or None)
 
         self.control_labels = {}
         self.control_rows = {}
@@ -1146,9 +1208,9 @@ class DoKeyApp(ctk.CTk):
         self.layout_var = None
         self.delete_layout_btn = None
 
-        self.title(t("app_title"))
-        self.geometry("1120x880")
-        self.minsize(980, 740)
+        self.title(t_raw("app_title"))
+        self.geometry("1180x920")
+        self.minsize(1040, 780)
         self.configure(fg_color=P["bg"])
 
         ctk.set_appearance_mode("dark")
@@ -1156,7 +1218,6 @@ class DoKeyApp(ctk.CTk):
 
         self._build_ui()
 
-        # Restore last layout BEFORE first render of P2 panel
         self._load_last_layout_into_state()
 
         self._start_listener()
@@ -1183,7 +1244,7 @@ class DoKeyApp(ctk.CTk):
 
     def _apply_language_to_ui(self):
         try:
-            self.title(t("app_title"))
+            self.title(t_raw("app_title"))
             self.title_label.configure(text=t("app_name"))
             self.subtitle_label.configure(text=t("app_subtitle"))
             tabs = [t("tab_p1"), t("tab_p2")]
@@ -1370,27 +1431,27 @@ class DoKeyApp(ctk.CTk):
     def _build_ui(self):
         # ---- Header ----
         header = ctk.CTkFrame(self, fg_color=P["panel"],
-                              corner_radius=0, height=72)
+                              corner_radius=0, height=84)
         header.pack(fill="x"); header.pack_propagate(False)
 
         tb = ctk.CTkFrame(header, fg_color="transparent")
-        tb.pack(side="left", padx=24, pady=12)
+        tb.pack(side="left", padx=28, pady=14)
         self.title_label = ctk.CTkLabel(
             tb, text=t("app_name"),
-            font=ctk.CTkFont(size=26, weight="bold"),
+            font=ctk.CTkFont(size=FS["app_name"], weight="bold"),
             text_color=P["text"])
         self.title_label.pack(anchor="w")
         self.subtitle_label = ctk.CTkLabel(
             tb, text=t("app_subtitle"),
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=FS["app_subtitle"]),
             text_color=P["text_dim"])
-        self.subtitle_label.pack(anchor="w")
+        self.subtitle_label.pack(anchor="w", pady=(2, 0))
 
         self.driver_badge = ctk.CTkLabel(
             header, text=t("badge_checking"),
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(size=FS["badge"], weight="bold"),
             text_color=P["text_dim"])
-        self.driver_badge.pack(side="right", padx=(8, 24))
+        self.driver_badge.pack(side="right", padx=(8, 28))
 
         self.lang_seg = ctk.CTkSegmentedButton(
             header, values=["EN", "دری"],
@@ -1400,17 +1461,17 @@ class DoKeyApp(ctk.CTk):
             unselected_color=P["card"],
             unselected_hover_color=P["card_hover"],
             text_color=P["text"],
-            font=ctk.CTkFont(size=12, weight="bold"),
-            width=110, height=32)
+            font=ctk.CTkFont(size=FS["lang"], weight="bold"),
+            width=130, height=38)
         self.lang_seg.pack(side="right", padx=(8, 0))
         self.lang_seg.set("دری" if _current_lang == "fa" else "EN")
 
         # ---- Toolbar ----
         bar = ctk.CTkFrame(self, fg_color=P["panel"],
-                           corner_radius=0, height=66)
+                           corner_radius=0, height=76)
         bar.pack(fill="x"); bar.pack_propagate(False)
         inner = ctk.CTkFrame(bar, fg_color="transparent")
-        inner.pack(fill="both", expand=True, padx=20, pady=12)
+        inner.pack(fill="both", expand=True, padx=24, pady=14)
 
         self.tabs_bar = ctk.CTkSegmentedButton(
             inner, values=[t("tab_p1"), t("tab_p2")],
@@ -1420,8 +1481,8 @@ class DoKeyApp(ctk.CTk):
             unselected_color=P["card"],
             unselected_hover_color=P["card_hover"],
             text_color=P["text"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            height=36, width=280)
+            font=ctk.CTkFont(size=FS["tab"], weight="bold"),
+            height=42, width=320)
         self.tabs_bar.pack(side="left")
         self.tabs_bar.set(t("tab_p1"))
 
@@ -1429,31 +1490,31 @@ class DoKeyApp(ctk.CTk):
             inner, text=t("btn_start"), command=self._on_start,
             fg_color=P["success"], hover_color=P["success_hover"],
             text_color="#0d0f1a",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            width=130, height=36)
-        self.start_btn.pack(side="right", padx=(8, 0))
+            font=ctk.CTkFont(size=FS["btn_main"], weight="bold"),
+            width=150, height=42)
+        self.start_btn.pack(side="right", padx=(10, 0))
 
         self.stop_btn = ctk.CTkButton(
             inner, text=t("btn_stop"), command=self._on_stop,
             fg_color=P["danger"], hover_color=P["danger_hover"],
             text_color=P["text"],
-            font=ctk.CTkFont(size=14, weight="bold"),
-            width=130, height=36, state="disabled")
-        self.stop_btn.pack(side="right", padx=(8, 0))
+            font=ctk.CTkFont(size=FS["btn_main"], weight="bold"),
+            width=150, height=42, state="disabled")
+        self.stop_btn.pack(side="right", padx=(10, 0))
 
         # ---- Content ----
         self.content = ctk.CTkFrame(self, fg_color="transparent")
-        self.content.pack(fill="both", expand=True, padx=20, pady=(14, 12))
+        self.content.pack(fill="both", expand=True, padx=24, pady=(16, 14))
 
         # ---- Status bar ----
         sb = ctk.CTkFrame(self, fg_color=P["panel"],
-                          corner_radius=0, height=32)
+                          corner_radius=0, height=38)
         sb.pack(fill="x", side="bottom"); sb.pack_propagate(False)
         self.status_label = ctk.CTkLabel(
             sb, text=t("status_ready"),
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=FS["status"]),
             text_color=P["text_dim"])
-        self.status_label.pack(side="left", padx=20)
+        self.status_label.pack(side="left", padx=24)
 
     def _rebuild_tab_content(self):
         for c in self.content.winfo_children():
@@ -1476,24 +1537,24 @@ class DoKeyApp(ctk.CTk):
     # ---- Player 1 panel ----
     def _build_player1_panel(self):
         panel = ctk.CTkFrame(self.content, fg_color="transparent")
-        card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=12)
+        card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=14)
         card.pack(fill="both", expand=True)
         inner = ctk.CTkFrame(card, fg_color="transparent")
         inner.pack(expand=True)
 
         ctk.CTkLabel(inner, text="💻",
-                     font=ctk.CTkFont(size=44)).pack(pady=(40, 8))
+                     font=ctk.CTkFont(size=52)).pack(pady=(50, 12))
         ctk.CTkLabel(inner, text=t("p1_title"),
-                     font=ctk.CTkFont(size=18, weight="bold"),
-                     text_color=P["text"]).pack(pady=(0, 12))
+                     font=ctk.CTkFont(size=FS["section_big"], weight="bold"),
+                     text_color=P["text"]).pack(pady=(0, 16))
         ctk.CTkLabel(inner, text=t("p1_body"),
-                     font=ctk.CTkFont(size=13),
+                     font=ctk.CTkFont(size=FS["body"]),
                      text_color=P["text_dim"],
-                     justify="center").pack(pady=(0, 20))
+                     justify="center").pack(pady=(0, 24))
         ctk.CTkLabel(inner, text=t("p1_note"),
-                     font=ctk.CTkFont(size=11),
+                     font=ctk.CTkFont(size=FS["card_small"]),
                      text_color=P["warn"],
-                     justify="center").pack(pady=(0, 40))
+                     justify="center").pack(pady=(0, 50))
         return panel
 
     # ---- Player 2 panel ----
@@ -1504,71 +1565,85 @@ class DoKeyApp(ctk.CTk):
             p2_dev = self._state["p2_device_id"]
 
         # ---- Layout card ----
-        layout_card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=12)
-        layout_card.pack(fill="x", pady=(0, 12))
+        layout_card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=14)
+        layout_card.pack(fill="x", pady=(0, 14))
 
         li = ctk.CTkFrame(layout_card, fg_color="transparent")
-        li.pack(fill="x", padx=20, pady=14)
+        li.pack(fill="x", padx=24, pady=18)
 
         ctk.CTkLabel(li, text=t("layout_title"),
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=P["text"]).pack(side="left", padx=(0, 16))
+                     font=ctk.CTkFont(size=FS["card_title"], weight="bold"),
+                     text_color=P["text"]).pack(side="left", padx=(0, 18))
 
         no_layout_label = t("no_layout")
-        layout_names = [no_layout_label] + list_layouts()
-        current_name = self.current_layout_name or no_layout_label
-        if current_name not in layout_names:
-            current_name = no_layout_label
+        real_names = list_layouts()
+        display_names = [no_layout_label]
+        self._layout_display_map = {no_layout_label: None}
+        for real in real_names:
+            disp = _reshape_rtl(real)
+            display_names.append(disp)
+            self._layout_display_map[disp] = real
 
-        self.layout_var = ctk.StringVar(value=current_name)
+        current_display = no_layout_label
+        if self.current_layout_name:
+            for disp, real in self._layout_display_map.items():
+                if real == self.current_layout_name:
+                    current_display = disp
+                    break
+        if current_display not in display_names:
+            current_display = no_layout_label
+
+        self.layout_var = ctk.StringVar(value=current_display)
         self.layout_menu = ctk.CTkOptionMenu(
-            li, values=layout_names, variable=self.layout_var,
-            width=260, height=34,
+            li, values=display_names, variable=self.layout_var,
+            width=290, height=40,
             fg_color=P["panel"], button_color=P["border"],
             button_hover_color=P["accent"],
             dropdown_fg_color=P["panel"],
             dropdown_hover_color=P["accent"],
             text_color=P["text"],
+            font=ctk.CTkFont(size=FS["card_text"]),
+            dropdown_font=ctk.CTkFont(size=FS["card_text"]),
             command=self._on_layout_selected)
-        self.layout_menu.pack(side="left", padx=(0, 10))
+        self.layout_menu.pack(side="left", padx=(0, 12))
 
         ctk.CTkButton(
             li, text=t("save_as"), command=self._on_save_layout,
             fg_color=P["accent"], hover_color=P["accent_hover"],
             text_color=P["text"],
-            font=ctk.CTkFont(size=12, weight="bold"),
-            width=140, height=34).pack(side="left", padx=(0, 8))
+            font=ctk.CTkFont(size=FS["card_text"], weight="bold"),
+            width=170, height=40).pack(side="left", padx=(0, 10))
 
         self.delete_layout_btn = ctk.CTkButton(
             li, text=t("btn_delete"), command=self._on_delete_layout,
             fg_color=P["danger"], hover_color=P["danger_hover"],
             text_color=P["text"],
-            font=ctk.CTkFont(size=12, weight="bold"),
-            width=120, height=34)
+            font=ctk.CTkFont(size=FS["card_text"], weight="bold"),
+            width=140, height=40)
         self.delete_layout_btn.pack(side="left")
-        if current_name == no_layout_label:
+        if current_display == no_layout_label:
             self.delete_layout_btn.configure(state="disabled")
 
         # ---- Keyboard card ----
-        kb_card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=12)
-        kb_card.pack(fill="x", pady=(0, 12))
+        kb_card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=14)
+        kb_card.pack(fill="x", pady=(0, 14))
 
         kbi = ctk.CTkFrame(kb_card, fg_color="transparent")
-        kbi.pack(fill="x", padx=20, pady=16)
+        kbi.pack(fill="x", padx=24, pady=20)
 
         ctk.CTkLabel(kbi, text=t("ext_keyboard"),
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=P["text"]).pack(side="left", padx=(0, 16))
+                     font=ctk.CTkFont(size=FS["card_title"], weight="bold"),
+                     text_color=P["text"]).pack(side="left", padx=(0, 18))
 
         if p2_dev is None:
             ctk.CTkLabel(kbi, text=t("not_detected"),
-                         font=ctk.CTkFont(size=12),
+                         font=ctk.CTkFont(size=FS["card_text"]),
                          text_color=P["text_dim"]).pack(side="left")
         else:
             name = self.devices.get(p2_dev,
                                     t("keyboard_device_fmt", id=p2_dev))
             ctk.CTkLabel(kbi, text=name,
-                         font=ctk.CTkFont(size=12, weight="bold"),
+                         font=ctk.CTkFont(size=FS["card_text"], weight="bold"),
                          text_color=P["success"]).pack(side="left")
 
         detect_btn = ctk.CTkButton(
@@ -1576,91 +1651,94 @@ class DoKeyApp(ctk.CTk):
             command=self._start_detect,
             fg_color=P["accent"], hover_color=P["accent_hover"],
             text_color=P["text"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            width=180, height=36)
+            font=ctk.CTkFont(size=FS["card_title"], weight="bold"),
+            width=210, height=42)
         detect_btn.pack(side="right")
         self.detect_btn = detect_btn
 
         # ---- Prompt card if no keyboard ----
         if p2_dev is None:
-            prompt = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=12)
+            prompt = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=14)
             prompt.pack(fill="both", expand=True)
             inner = ctk.CTkFrame(prompt, fg_color="transparent")
             inner.pack(expand=True)
 
             ctk.CTkLabel(inner, text="🎯",
-                         font=ctk.CTkFont(size=44)).pack(pady=(40, 8))
+                         font=ctk.CTkFont(size=52)).pack(pady=(50, 12))
             ctk.CTkLabel(inner, text=t("no_kb_title"),
-                         font=ctk.CTkFont(size=18, weight="bold"),
-                         text_color=P["text"]).pack(pady=(0, 12))
+                         font=ctk.CTkFont(size=FS["section_big"], weight="bold"),
+                         text_color=P["text"]).pack(pady=(0, 16))
             ctk.CTkLabel(inner, text=t("no_kb_body"),
-                         font=ctk.CTkFont(size=13),
+                         font=ctk.CTkFont(size=FS["body"]),
                          text_color=P["text_dim"],
-                         justify="center").pack(pady=(0, 20))
+                         justify="center").pack(pady=(0, 24))
             ctk.CTkLabel(inner, text=t("no_kb_tip"),
-                         font=ctk.CTkFont(size=11),
+                         font=ctk.CTkFont(size=FS["card_small"]),
                          text_color=P["warn"],
-                         justify="center").pack(pady=(0, 40))
+                         justify="center").pack(pady=(0, 50))
             return panel
 
         # ---- Bindings card ----
-        ctl_card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=12)
+        ctl_card = ctk.CTkFrame(panel, fg_color=P["card"], corner_radius=14)
         ctl_card.pack(fill="both", expand=True)
 
         hdr = ctk.CTkFrame(ctl_card, fg_color="transparent")
-        hdr.pack(fill="x", padx=20, pady=(14, 6))
+        hdr.pack(fill="x", padx=24, pady=(18, 8))
         ctk.CTkLabel(hdr, text=t("bindings_title"),
-                     font=ctk.CTkFont(size=13, weight="bold"),
+                     font=ctk.CTkFont(size=FS["card_title"], weight="bold"),
                      text_color=P["text"]).pack(side="left")
         ctk.CTkButton(
             hdr, text=t("btn_clear_all"), command=self._clear_all_bindings,
             fg_color=P["panel"], hover_color=P["card_hover"],
             text_color=P["text"],
-            width=110, height=28).pack(side="right")
+            font=ctk.CTkFont(size=FS["row_btn"]),
+            width=130, height=34).pack(side="right")
 
         scroll = ctk.CTkScrollableFrame(
-            ctl_card, fg_color=P["panel"], corner_radius=8)
-        scroll.pack(fill="both", expand=True, padx=16, pady=(6, 16))
+            ctl_card, fg_color=P["panel"], corner_radius=10)
+        scroll.pack(fill="both", expand=True, padx=20, pady=(8, 20))
 
         for col, text in enumerate([t("col_control"), t("col_bound_key"),
                                     "", ""]):
             ctk.CTkLabel(scroll, text=text, anchor="w",
-                         font=ctk.CTkFont(size=11, weight="bold"),
+                         font=ctk.CTkFont(size=FS["col_header"], weight="bold"),
                          text_color=P["text_dim"]).grid(
-                row=0, column=col, padx=8, pady=(4, 8), sticky="w")
+                row=0, column=col, padx=10, pady=(6, 10), sticky="w")
 
         with self._state_lock:
             vk_map = dict(self._state["p2_vk_to_control"])
 
         for row, control in enumerate(ALL_CONTROLS, start=1):
-            ctk.CTkLabel(scroll, text=control, anchor="w", width=110,
-                         font=ctk.CTkFont(size=13),
+            ctk.CTkLabel(scroll, text=control, anchor="w", width=130,
+                         font=ctk.CTkFont(size=FS["control"]),
                          text_color=P["text"]).grid(
-                row=row, column=0, padx=8, pady=4, sticky="w")
+                row=row, column=0, padx=10, pady=6, sticky="w")
 
             key_lbl = ctk.CTkLabel(
                 scroll, text="—", anchor="w",
-                font=ctk.CTkFont(size=12, weight="bold"),
+                font=ctk.CTkFont(size=FS["bound_key"], weight="bold"),
                 text_color=P["text_dim"],
-                fg_color=P["card"], corner_radius=6,
-                width=160, height=30)
-            key_lbl.grid(row=row, column=1, padx=8, pady=4, sticky="w")
+                fg_color=P["card"], corner_radius=8,
+                width=190, height=36)
+            key_lbl.grid(row=row, column=1, padx=10, pady=6, sticky="w")
 
             bind_btn = ctk.CTkButton(
-                scroll, text=t("btn_bind"), width=80, height=28,
+                scroll, text=t("btn_bind"), width=100, height=34,
                 command=lambda c=control: self._start_binding(c),
                 fg_color=P["panel"], hover_color=P["card_hover"],
                 text_color=P["text"],
+                font=ctk.CTkFont(size=FS["row_btn"]),
                 border_width=1, border_color=P["border"])
-            bind_btn.grid(row=row, column=2, padx=8, pady=4)
+            bind_btn.grid(row=row, column=2, padx=10, pady=6)
 
             clear_btn = ctk.CTkButton(
-                scroll, text=t("btn_clear"), width=80, height=28,
+                scroll, text=t("btn_clear"), width=100, height=34,
                 command=lambda c=control: self._clear_binding(c),
                 fg_color=P["panel"], hover_color=P["card_hover"],
                 text_color=P["text"],
+                font=ctk.CTkFont(size=FS["row_btn"]),
                 border_width=1, border_color=P["border"])
-            clear_btn.grid(row=row, column=3, padx=8, pady=4)
+            clear_btn.grid(row=row, column=3, padx=10, pady=6)
 
             self.control_labels[control] = key_lbl
             self.control_rows[control] = (key_lbl, bind_btn, clear_btn)
@@ -1679,8 +1757,8 @@ class DoKeyApp(ctk.CTk):
     # =================================================================
 
     def _on_layout_selected(self, value):
-        no_layout_label = t("no_layout")
-        if value == no_layout_label:
+        real_name = self._layout_display_map.get(value, None)
+        if real_name is None:
             self.current_layout_name = None
             set_config_value("last_layout", None)
             with self._state_lock:
@@ -1689,9 +1767,9 @@ class DoKeyApp(ctk.CTk):
             self._set_status(t("status_layout_cleared"))
             return
 
-        layout = load_layout(value)
+        layout = load_layout(real_name)
         if layout is None:
-            self._set_status(t("status_layout_load_error", name=value))
+            self._set_status(t("status_layout_load_error", name=real_name))
             return
 
         with self._state_lock:
@@ -1705,7 +1783,7 @@ class DoKeyApp(ctk.CTk):
         if layout["device_id"] is None:
             dev_note = t("status_layout_no_kb")
         self._set_status(t("status_layout_loaded",
-                           name=layout["name"],
+                           name=_reshape_rtl(layout["name"]),
                            n=len(layout["vk_map"]),
                            dev_note=dev_note))
 
@@ -1744,7 +1822,7 @@ class DoKeyApp(ctk.CTk):
         set_config_value("last_layout", name)
         self._rebuild_tab_content()
         self._set_status(t("status_layout_saved",
-                           name=name, n=len(vk_map)))
+                           name=_reshape_rtl(name), n=len(vk_map)))
 
     def _on_delete_layout(self):
         if not self.current_layout_name:
@@ -1753,7 +1831,8 @@ class DoKeyApp(ctk.CTk):
         name = self.current_layout_name
         confirm = ConfirmDialog(self,
                                 title=t("dlg_delete_title"),
-                                message=t("dlg_delete_text", name=name))
+                                message=t("dlg_delete_text",
+                                          name=_reshape_rtl(name)))
         if not confirm.result:
             return
         if delete_layout(name):
@@ -1761,9 +1840,11 @@ class DoKeyApp(ctk.CTk):
             if get_config_value("last_layout") == name:
                 set_config_value("last_layout", None)
             self._rebuild_tab_content()
-            self._set_status(t("status_layout_deleted", name=name))
+            self._set_status(t("status_layout_deleted",
+                               name=_reshape_rtl(name)))
         else:
-            self._set_status(t("status_layout_delete_failed", name=name))
+            self._set_status(t("status_layout_delete_failed",
+                               name=_reshape_rtl(name)))
 
     # =================================================================
     #  Handlers
