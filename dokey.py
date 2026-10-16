@@ -1,24 +1,23 @@
 #!/usr/bin/env python3
 """
-DoKey — دو کلید — BUILD v24
+DoKey — دو کلید — BUILD v25
 Two-player keyboard splitter with live controller preview.
+
+Highlights (v25):
+  - App icon is loaded from "icondokey.ico" placed next to dokey.py.
+    Used in the main window, taskbar, tray, and all dialogs.
+    Also works from a PyInstaller onefile build (checks sys._MEIPASS).
+    If the .ico is missing, the app still runs; the tray falls back to
+    a drawn DK icon.
 
 Highlights (v24):
   - Live Controller canvas shrunk to 440x340 and the gamepad drawing
-    rescaled to fit with proper margin, so nothing clips even with the
-    status bar reserving 38 px at the bottom of the window.
-  - Preview panel is now 480x440 (was 500x500) to match the new canvas.
-  - Gap between LB/RB and the gamepad body is now larger.
+    rescaled to fit with proper margin.
 
 Highlights (v23):
-  - Status bar is now packed BEFORE the content area, so it is always
+  - Status bar is packed BEFORE the content area, so it is always
     visible at the bottom of the window.
   - "Built by: Ahmad Faisal Amin" is shown on the right of the status bar.
-
-Highlights (v22):
-  - Built-in keyboard is reserved for Player 1 (rejected on Player 2 tab).
-  - Persian p1_body now matches the English text exactly.
-  - Layout card auto-sizes; Link-to-Game hint uses a larger font.
 
 Features:
   - Multiple keys per Xbox button
@@ -36,6 +35,37 @@ import tkinter as tk
 from tkinter import messagebox
 
 # =====================================================================
+#  RESOURCES / ICON
+# =====================================================================
+
+def _resource_path(name):
+    """
+    Return the absolute path to a bundled resource.
+
+    In dev, resources live next to dokey.py. In a PyInstaller onefile or
+    onedir build, PyInstaller extracts bundled data to sys._MEIPASS (or
+    the app directory for onedir). Both cases are handled here.
+    """
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, name)
+
+ICON_FILE = _resource_path("icondokey.ico")
+IS_FROZEN = getattr(sys, "frozen", False)
+
+def _apply_window_icon(window):
+    """Set the taskbar/title-bar icon on a Tk or CTk window.
+    Silently does nothing if the .ico is missing or the platform
+    rejects it (iconbitmap is Windows-only for .ico files)."""
+    try:
+        if os.path.isfile(ICON_FILE):
+            window.iconbitmap(ICON_FILE)
+    except Exception as e:
+        print(f"[DoKey] Could not set window icon: {e}")
+
+# =====================================================================
 #  PACKAGES
 # =====================================================================
 
@@ -49,6 +79,8 @@ REQUIRED_PACKAGES = {
 }
 
 def _pip_ok():
+    if IS_FROZEN:
+        return False
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "--version"],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -58,6 +90,8 @@ def _pip_ok():
         return False
 
 def _bootstrap_pip():
+    if IS_FROZEN:
+        return True
     if _pip_ok(): return True
     for args in (["--default-pip"], ["--user"], []):
         try:
@@ -98,6 +132,13 @@ def _verify(mod):
     except Exception: return False
 
 def ensure_packages():
+    # When PyInstaller has frozen us into an exe, every dependency was
+    # already bundled at build time. sys.executable points at our OWN
+    # exe, so any subprocess call would relaunch DoKey recursively and
+    # spawn thousands of copies. Never auto-install in frozen mode.
+    if IS_FROZEN:
+        print("[DoKey] Frozen build — skipping package auto-install.")
+        return
     if not _bootstrap_pip():
         print("[DoKey] ERROR: pip unavailable.")
         _hard_exit("DoKey could not bootstrap pip.")
@@ -121,17 +162,22 @@ def ensure_packages():
 
 def _hard_exit(msg):
     """Exit with a message; use a dialog if there's no console."""
-    print(f"[DoKey] {msg}")
+    try:
+        print(f"[DoKey] {msg}")
+    except Exception:
+        pass
     try:
         import tkinter as _tk
         from tkinter import messagebox as _mb
         _r = _tk.Tk(); _r.withdraw()
+        _apply_window_icon(_r)
         _mb.showerror("DoKey", msg)
         _r.destroy()
     except Exception:
-        try: input("Press Enter to exit...")
-        except Exception: pass
+        # No display, no console, no Tk — nothing we can do but exit.
+        pass
     sys.exit(1)
+
 
 # =====================================================================
 #  RAW INPUT
@@ -754,8 +800,7 @@ class ControllerPreview:
         self.button_items["LB"] = (lb_rect, lb_txt)
         self.button_items["RB"] = (rb_rect, rb_txt)
 
-        # Body outline — top at 58, bottom at 315, so it sits well below
-        # LB/RB and well above the canvas bottom edge (340 - 315 = 25 px).
+        # Body outline
         body_pts = [
             65, 97, 120, 67, 220, 58, 320, 67, 375, 97,
             405, 139, 412, 190, 405, 241, 385, 278, 350, 308,
@@ -834,7 +879,7 @@ class ControllerPreview:
         if "LS Up"    in active_set: dy -= 10
         if "LS Down"  in active_set: dy += 10
         try:
-            cx, cy = 100, 134          # v24: was 141
+            cx, cy = 100, 134
             r = 8
             self.canvas.coords(self.stick_dots["L"],
                                cx - r + dx, cy - r + dy,
@@ -847,7 +892,7 @@ class ControllerPreview:
         if "RS Up"    in active_set: dy -= 10
         if "RS Down"  in active_set: dy += 10
         try:
-            cx, cy = 310, 232          # v24: was 245
+            cx, cy = 310, 232
             r = 8
             self.canvas.coords(self.stick_dots["R"],
                                cx - r + dx, cy - r + dy,
@@ -1395,6 +1440,7 @@ class NameDialog(ctk.CTkToplevel):
         self.result = None
         self.title(title); self.geometry("500x220"); self.resizable(False, False)
         self.configure(fg_color=P["bg"])
+        _apply_window_icon(self)
         try: self.transient(parent); self.grab_set()
         except Exception: pass
         try:
@@ -1516,6 +1562,13 @@ class DoKeyApp(ctk.CTk):
         ctk.set_default_color_theme("blue")
 
         self._build_ui()
+
+        # v25: apply the .ico to the main window / taskbar. Called again
+        # shortly after so the icon sticks even if the WM hasn't created
+        # the underlying window handle yet during CTk initialization.
+        _apply_window_icon(self)
+        self.after(50, lambda: _apply_window_icon(self))
+
         self._load_last_layout_into_state()
 
         threading.Thread(target=self._setup_interception_worker,
@@ -1733,16 +1786,27 @@ class DoKeyApp(ctk.CTk):
     def _create_tray(self):
         if not HAS_TRAY: return
         try:
-            img = Image.new("RGBA", (64, 64), (13, 15, 26, 255))
-            d = ImageDraw.Draw(img)
-            d.rounded_rectangle([4, 4, 60, 60], radius=12,
-                                fill=(29, 34, 51, 255),
-                                outline=(91, 141, 239, 255), width=3)
-            try:
-                font = ImageFont.truetype("arial.ttf", 28)
-            except Exception:
-                font = ImageFont.load_default()
-            d.text((14, 16), "DK", fill=(232, 234, 242, 255), font=font)
+            # v25: prefer the real .ico file for the tray image. Fall
+            # back to the drawn "DK" placeholder if it can't be loaded.
+            tray_img = None
+            if os.path.isfile(ICON_FILE):
+                try:
+                    tray_img = Image.open(ICON_FILE).convert("RGBA")
+                    tray_img = tray_img.resize((64, 64), Image.LANCZOS)
+                except Exception as e:
+                    print(f"[DoKey] Could not load tray icon from .ico: {e}")
+                    tray_img = None
+            if tray_img is None:
+                tray_img = Image.new("RGBA", (64, 64), (13, 15, 26, 255))
+                d = ImageDraw.Draw(tray_img)
+                d.rounded_rectangle([4, 4, 60, 60], radius=12,
+                                    fill=(29, 34, 51, 255),
+                                    outline=(91, 141, 239, 255), width=3)
+                try:
+                    font = ImageFont.truetype("arial.ttf", 28)
+                except Exception:
+                    font = ImageFont.load_default()
+                d.text((14, 16), "DK", fill=(232, 234, 242, 255), font=font)
 
             menu = pystray.Menu(
                 pystray.MenuItem("Show / Hide",
@@ -1756,7 +1820,7 @@ class DoKeyApp(ctk.CTk):
                 pystray.MenuItem("Quit",
                                  lambda *a: self._tray_queue.put("quit")),
             )
-            self.tray_icon = pystray.Icon("DoKey", img, "DoKey", menu)
+            self.tray_icon = pystray.Icon("DoKey", tray_img, "DoKey", menu)
             threading.Thread(target=self.tray_icon.run,
                              daemon=True, name="TrayIcon").start()
             print("[DoKey] System tray icon created.")
@@ -2628,8 +2692,6 @@ class DoKeyApp(ctk.CTk):
         body = ctk.CTkFrame(ctl_card, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=20, pady=(8, 20))
 
-        # v24: preview panel shrunk to 480x440 to match the new 440x340
-        # canvas. Enough room for title + hint + canvas + margin.
         preview_wrap = ctk.CTkFrame(body, fg_color=P["panel"], corner_radius=10,
                                     width=480, height=440)
         preview_wrap.pack(side="right", fill="y")
@@ -2928,7 +2990,9 @@ class DoKeyApp(ctk.CTk):
 # =====================================================================
 
 def main():
-    print("[DoKey] BUILD v24 — starting.")
+    print("[DoKey] BUILD v25 — starting.")
+    print(f"[DoKey] Icon file: {ICON_FILE} "
+          f"({'found' if os.path.isfile(ICON_FILE) else 'not found'})")
     try:
         test = vg.VX360Gamepad(); test.reset(); del test; gc.collect()
     except Exception as e:
