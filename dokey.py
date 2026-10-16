@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """
-DoKey — دو کلید — BUILD v22
+DoKey — دو کلید — BUILD v24
 Two-player keyboard splitter with live controller preview.
+
+Highlights (v24):
+  - Live Controller canvas shrunk to 440x340 and the gamepad drawing
+    rescaled to fit with proper margin, so nothing clips even with the
+    status bar reserving 38 px at the bottom of the window.
+  - Preview panel is now 480x440 (was 500x500) to match the new canvas.
+  - Gap between LB/RB and the gamepad body is now larger.
+
+Highlights (v23):
+  - Status bar is now packed BEFORE the content area, so it is always
+    visible at the bottom of the window.
+  - "Built by: Ahmad Faisal Amin" is shown on the right of the status bar.
 
 Highlights (v22):
   - Built-in keyboard is reserved for Player 1 (rejected on Player 2 tab).
   - Persian p1_body now matches the English text exactly.
-  - Live Controller panel no longer clips the bottom of the gamepad.
   - Layout card auto-sizes; Link-to-Game hint uses a larger font.
-
-Highlights (v21):
-  - Any external keyboard can be detected and bound.
-  - Robust plug/unplug handling driven by RawInput count changes.
-  - No false "keyboard disconnected" warnings from silence alone.
-  - "Forget Keyboard" button to re-detect without restarting.
-  - Driver-restart flag so Start doesn't briefly look unavailable.
-  - Link-to-Game countdown is 10 s consistently (EN + FA).
-  - Layout files no longer store a stale device id.
 
 Features:
   - Multiple keys per Xbox button
@@ -708,9 +710,11 @@ class InterceptionListener(threading.Thread):
 # =====================================================================
 
 class ControllerPreview:
+    # v24: canvas shrunk from 380 to 340 tall, and the drawing rescaled
+    # (body top 58, body bottom 315) so nothing clips even with the
+    # 38 px status bar reserving space at the bottom of the window.
     CANVAS_W = 440
-    CANVAS_H = 380          # v22: was 420 — smaller so the whole
-                            # body fits without clipping the bottom.
+    CANVAS_H = 340
 
     BASE_FILL    = "#262c42"
     ACTIVE_FILL  = "#5b8def"
@@ -734,74 +738,76 @@ class ControllerPreview:
         OL = self.OUTLINE
         LF = self.LABEL_FILL
 
-        # --- top shoulder buttons (LT/RT, LB/RB) ---
-        lt_rect = c.create_rectangle(65, 7, 165, 29, fill=BF, outline=OL, width=1)
-        rt_rect = c.create_rectangle(275, 7, 375, 29, fill=BF, outline=OL, width=1)
-        lt_txt  = c.create_text(115, 18, text="LT", fill=LF, font=("Segoe UI", 11, "bold"))
-        rt_txt  = c.create_text(325, 18, text="RT", fill=LF, font=("Segoe UI", 11, "bold"))
+        # LT / RT — top row, tight against the top edge
+        lt_rect = c.create_rectangle(65, 3, 165, 23, fill=BF, outline=OL, width=1)
+        rt_rect = c.create_rectangle(275, 3, 375, 23, fill=BF, outline=OL, width=1)
+        lt_txt  = c.create_text(115, 13, text="LT", fill=LF, font=("Segoe UI", 11, "bold"))
+        rt_txt  = c.create_text(325, 13, text="RT", fill=LF, font=("Segoe UI", 11, "bold"))
         self.button_items["LT"] = (lt_rect, lt_txt)
         self.button_items["RT"] = (rt_rect, rt_txt)
 
-        lb_rect = c.create_rectangle(65, 36, 165, 58, fill=BF, outline=OL, width=1)
-        rb_rect = c.create_rectangle(275, 36, 375, 58, fill=BF, outline=OL, width=1)
-        lb_txt  = c.create_text(115, 47, text="LB", fill=LF, font=("Segoe UI", 11, "bold"))
-        rb_txt  = c.create_text(325, 47, text="RB", fill=LF, font=("Segoe UI", 11, "bold"))
+        # LB / RB — second row, with a healthy 10 px gap above the body
+        lb_rect = c.create_rectangle(65, 28, 165, 48, fill=BF, outline=OL, width=1)
+        rb_rect = c.create_rectangle(275, 28, 375, 48, fill=BF, outline=OL, width=1)
+        lb_txt  = c.create_text(115, 38, text="LB", fill=LF, font=("Segoe UI", 11, "bold"))
+        rb_txt  = c.create_text(325, 38, text="RB", fill=LF, font=("Segoe UI", 11, "bold"))
         self.button_items["LB"] = (lb_rect, lb_txt)
         self.button_items["RB"] = (rb_rect, rb_txt)
 
-        # --- body outline (y values scaled ×0.9 vs v21) ---
+        # Body outline — top at 58, bottom at 315, so it sits well below
+        # LB/RB and well above the canvas bottom edge (340 - 315 = 25 px).
         body_pts = [
-            65, 101, 120, 69, 220, 60, 320, 69, 375, 101,
-            405, 146, 412, 200, 405, 254, 385, 294, 350, 326,
-            315, 333, 295, 299, 270, 267, 225, 258, 215, 258,
-            170, 267, 145, 299, 125, 333, 90, 326, 55, 294,
-            35, 254, 28, 200, 35, 146,
+            65, 97, 120, 67, 220, 58, 320, 67, 375, 97,
+            405, 139, 412, 190, 405, 241, 385, 278, 350, 308,
+            315, 315, 295, 283, 270, 253, 225, 244, 215, 244,
+            170, 253, 145, 283, 125, 315, 90, 308, 55, 278,
+            35, 241, 28, 190, 35, 139,
         ]
         c.create_polygon(body_pts, fill=self.BODY_FILL, outline=self.BODY_OUTLINE,
                          width=2, smooth=True)
 
-        # --- left analog stick ---
-        ls_circle = c.create_oval(78, 122, 122, 161, fill=BF, outline=OL, width=2)
-        ls_dot    = c.create_oval(92, 134, 108, 149, fill=OL, outline="")
+        # Left stick
+        ls_circle = c.create_oval(78, 116, 122, 153, fill=BF, outline=OL, width=2)
+        ls_dot    = c.create_oval(92, 127, 108, 142, fill=OL, outline="")
         self.button_items["LS Click"] = (ls_circle, None)
         self.stick_dots["L"] = ls_dot
 
-        # --- right analog stick ---
-        rs_circle = c.create_oval(288, 225, 332, 265, fill=BF, outline=OL, width=2)
-        rs_dot    = c.create_oval(302, 238, 318, 252, fill=OL, outline="")
+        # Right stick
+        rs_circle = c.create_oval(288, 213, 332, 251, fill=BF, outline=OL, width=2)
+        rs_dot    = c.create_oval(302, 225, 318, 239, fill=OL, outline="")
         self.button_items["RS Click"] = (rs_circle, None)
         self.stick_dots["R"] = rs_dot
 
-        # --- D-Pad ---
-        dp_up    = c.create_rectangle(91, 225, 109, 245, fill=BF, outline="")
-        dp_down  = c.create_rectangle(91, 245, 109, 265, fill=BF, outline="")
-        dp_left  = c.create_rectangle(78, 237, 91, 253, fill=BF, outline="")
-        dp_right = c.create_rectangle(109, 237, 122, 253, fill=BF, outline="")
-        c.create_rectangle(91, 237, 109, 253, fill=BF, outline="")
+        # D-pad
+        dp_up    = c.create_rectangle(91, 213, 109, 232, fill=BF, outline="")
+        dp_down  = c.create_rectangle(91, 232, 109, 251, fill=BF, outline="")
+        dp_left  = c.create_rectangle(78, 225, 91, 240, fill=BF, outline="")
+        dp_right = c.create_rectangle(109, 225, 122, 240, fill=BF, outline="")
+        c.create_rectangle(91, 225, 109, 240, fill=BF, outline="")
         self.button_items["D-Pad Up"]    = (dp_up, None)
         self.button_items["D-Pad Down"]  = (dp_down, None)
         self.button_items["D-Pad Left"]  = (dp_left, None)
         self.button_items["D-Pad Right"] = (dp_right, None)
 
-        # --- face buttons (Y X B A) ---
-        y_circle = c.create_oval(293, 99, 327, 130, fill=BF, outline=OL, width=2)
-        x_circle = c.create_oval(263, 126, 297, 157, fill=BF, outline=OL, width=2)
-        b_circle = c.create_oval(323, 126, 357, 157, fill=BF, outline=OL, width=2)
-        a_circle = c.create_oval(293, 153, 327, 184, fill=BF, outline=OL, width=2)
-        y_txt = c.create_text(310, 114, text="Y", fill=LF, font=("Segoe UI", 13, "bold"))
-        x_txt = c.create_text(280, 141, text="X", fill=LF, font=("Segoe UI", 13, "bold"))
-        b_txt = c.create_text(340, 141, text="B", fill=LF, font=("Segoe UI", 13, "bold"))
-        a_txt = c.create_text(310, 168, text="A", fill=LF, font=("Segoe UI", 13, "bold"))
+        # Face buttons Y / X / B / A
+        y_circle = c.create_oval(293, 95, 327, 124, fill=BF, outline=OL, width=2)
+        x_circle = c.create_oval(263, 120, 297, 149, fill=BF, outline=OL, width=2)
+        b_circle = c.create_oval(323, 120, 357, 149, fill=BF, outline=OL, width=2)
+        a_circle = c.create_oval(293, 146, 327, 175, fill=BF, outline=OL, width=2)
+        y_txt = c.create_text(310, 109, text="Y", fill=LF, font=("Segoe UI", 13, "bold"))
+        x_txt = c.create_text(280, 134, text="X", fill=LF, font=("Segoe UI", 13, "bold"))
+        b_txt = c.create_text(340, 134, text="B", fill=LF, font=("Segoe UI", 13, "bold"))
+        a_txt = c.create_text(310, 160, text="A", fill=LF, font=("Segoe UI", 13, "bold"))
         self.button_items["Y"] = (y_circle, y_txt)
         self.button_items["X"] = (x_circle, x_txt)
         self.button_items["B"] = (b_circle, b_txt)
         self.button_items["A"] = (a_circle, a_txt)
 
-        # --- Back / Start ---
-        back_id  = c.create_oval(183, 189, 207, 211, fill=BF, outline=OL, width=1)
-        start_id = c.create_oval(213, 189, 237, 211, fill=BF, outline=OL, width=1)
-        c.create_text(195, 200, text="⏴", fill=LF, font=("Segoe UI", 10, "bold"))
-        c.create_text(225, 200, text="⏵", fill=LF, font=("Segoe UI", 10, "bold"))
+        # Back / Start
+        back_id  = c.create_oval(183, 179, 207, 200, fill=BF, outline=OL, width=1)
+        start_id = c.create_oval(213, 179, 237, 200, fill=BF, outline=OL, width=1)
+        c.create_text(195, 190, text="⏴", fill=LF, font=("Segoe UI", 10, "bold"))
+        c.create_text(225, 190, text="⏵", fill=LF, font=("Segoe UI", 10, "bold"))
         self.button_items["Back"]  = (back_id, None)
         self.button_items["Start"] = (start_id, None)
 
@@ -828,7 +834,7 @@ class ControllerPreview:
         if "LS Up"    in active_set: dy -= 10
         if "LS Down"  in active_set: dy += 10
         try:
-            cx, cy = 100, 141          # v22: was 157
+            cx, cy = 100, 134          # v24: was 141
             r = 8
             self.canvas.coords(self.stick_dots["L"],
                                cx - r + dx, cy - r + dy,
@@ -841,7 +847,7 @@ class ControllerPreview:
         if "RS Up"    in active_set: dy -= 10
         if "RS Down"  in active_set: dy += 10
         try:
-            cx, cy = 310, 245          # v22: was 272
+            cx, cy = 310, 232          # v24: was 245
             r = 8
             self.canvas.coords(self.stick_dots["R"],
                                cx - r + dx, cy - r + dy,
@@ -857,6 +863,7 @@ STRINGS = {
         "app_title":  "DoKey — دو کلید",
         "app_name":   "⚡ DoKey",
         "app_subtitle": "Two-Player Keyboard Splitter",
+        "built_by":   "Built by: Ahmad Faisal Amin",
         "tab_p1": "Player 1", "tab_p2": "Player 2",
         "btn_start": "▶  Start", "btn_stop": "■  Stop",
         "badge_checking": "●  CHECKING…",
@@ -913,18 +920,18 @@ STRINGS = {
         "status_layout_delete_failed": "Could not delete layout '{name}'.",
         "status_no_layout_sel": "No layout selected.",
         "status_nothing_to_save": "Nothing to save — bind some keys first.",
-        "status_stop_first_detect": "Stop first, then detect.",
-        "status_stop_first_bind": "Stop first, then bind.",
+        "status_stop_first_detect": "⚠ Stop first, then detect the keyboard.",
+        "status_stop_first_bind":   "⚠ Stop first, then bind keys. The controller is currently running.",
         "status_detect_first": "🎯 Detect a keyboard first.",
         "status_press_key_bind": "🎮 Press a key on the detected keyboard to bind to '{control}' (Esc to cancel)",
         "status_press_key_bind_wrong": "⚠ Wrong keyboard — press a key on the detected keyboard.",
         "status_detect_prompt": "🎯 Press any key on the keyboard you want Player 2 to use…",
-        "status_only_one_keyboard": "⚠ Only one keyboard detected. You can still bind it — click Detect and press a key.",
+        "status_only_one_keyboard": "⚠ No external keyboard detected. Plug in an external keyboard and try again.",
         "status_no_kb": "Detect a keyboard first.",
         "status_no_bindings": "Bind at least one control before starting.",
         "status_ctrl_failed": "Controller creation failed: {err}",
         "status_running": "Running — virtual controller active.",
-        "status_stopped": "Stopped.",
+        "status_stopped": "Stopped. You can now bind or edit keys.",
         "status_driver_missing": "⚠ Protection is not active. Please restart Windows after the driver finishes installing.",
         "status_reboot_needed": "⚠ Restart Windows to activate the Interception driver.",
         "status_anticheat_cancelled": "Start cancelled — anti-cheat warning not accepted.",
@@ -942,6 +949,8 @@ STRINGS = {
         "status_driver_restarting": "Reconnecting to keyboards…",
         "status_kb_count_changed_plug": "Keyboard plugged in — refreshing devices.",
         "status_kb_count_changed_unplug": "Keyboard removed — refreshing devices.",
+        "status_tab_p1": "Player 1 tab — informational only.",
+        "status_tab_p2": "Player 2 tab — ready to detect, bind, or start.",
 
         "banner_reboot": "⚠  Interception driver installed. Please restart Windows to activate it.",
         "banner_not_installed": "⚠  Interception driver is not installed. Protection will not work.",
@@ -978,6 +987,7 @@ STRINGS = {
         "app_title":  "DoKey — دو کلید",
         "app_name":   "⚡ دو کلید",
         "app_subtitle": "تقسیم کننده کیبود دو نفره",
+        "built_by":   "Built by: Ahmad Faisal Amin",
         "tab_p1": "بازیکن ۱", "tab_p2": "بازیکن ۲",
         "btn_start": "▶  شروع", "btn_stop": "■  توقف",
         "badge_checking": "●  در حال بررسی…",
@@ -1034,18 +1044,18 @@ STRINGS = {
         "status_layout_delete_failed": "حذف چیدمان '{name}' ممکن نشد.",
         "status_no_layout_sel": "چیدمانی انتخاب نشده.",
         "status_nothing_to_save": "چیزی برای ذخیره نیست.",
-        "status_stop_first_detect": "ابتدا متوقف کنید، سپس شناسایی کنید.",
-        "status_stop_first_bind": "ابتدا متوقف کنید، سپس اتصال دهید.",
+        "status_stop_first_detect": "⚠ ابتدا متوقف کنید، سپس کیبورد را شناسایی کنید.",
+        "status_stop_first_bind":   "⚠ ابتدا متوقف کنید، سپس کلیدها را متصل کنید. کنترولر در حال اجراست.",
         "status_detect_first": "🎯 ابتدا یک کیبورد شناسایی کنید.",
         "status_press_key_bind": "🎮 کلیدی روی کیبورد شناسایی‌شده فشار دهید تا به '{control}' متصل شود",
         "status_press_key_bind_wrong": "⚠ کیبورد اشتباه — روی کیبورد شناسایی‌شده کلید بزنید.",
         "status_detect_prompt": "🎯 هر کلیدی روی کیبوردی که می‌خواهید بازیکن ۲ استفاده کند فشار دهید…",
-        "status_only_one_keyboard": "⚠ فقط یک کیبورد شناسایی شد. باز هم می‌توانید آن را متصل کنید — شناسایی را بزنید.",
+        "status_only_one_keyboard": "⚠ کیبورد خارجی شناسایی نشد. ابتدا یک کیبورد خارجی وصل کنید.",
         "status_no_kb": "ابتدا یک کیبورد شناسایی کنید.",
         "status_no_bindings": "قبل از شروع، حداقل یک کنترول متصل کنید.",
         "status_ctrl_failed": "ایجاد کنترولر ناموفق بود: {err}",
         "status_running": "در حال اجرا — کنترولر مجازی فعال است.",
-        "status_stopped": "متوقف شد.",
+        "status_stopped": "متوقف شد. حالا می‌توانید کلیدها را متصل یا ویرایش کنید.",
         "status_driver_missing": "⚠ محافظت فعال نیست. پس از نصب درایور، ویندوز را ری‌استارت کنید.",
         "status_reboot_needed": "⚠ ویندوز را ری‌استارت کنید تا درایور فعال شود.",
         "status_anticheat_cancelled": "شروع لغو شد — هشدار ضد تقلب پذیرفته نشد.",
@@ -1063,6 +1073,8 @@ STRINGS = {
         "status_driver_restarting": "در حال اتصال مجدد به کیبوردها…",
         "status_kb_count_changed_plug": "کیبورد وصل شد — دستگاه‌ها بازخوانی می‌شوند.",
         "status_kb_count_changed_unplug": "کیبورد جدا شد — دستگاه‌ها بازخوانی می‌شوند.",
+        "status_tab_p1": "برگه بازیکن ۱ — فقط اطلاعاتی.",
+        "status_tab_p2": "برگه بازیکن ۲ — آماده برای شناسایی، اتصال یا شروع.",
 
         "banner_reboot": "⚠  درایور Interception نصب شد. ویندوز را ری‌استارت کنید.",
         "banner_not_installed": "⚠  درایور Interception نصب نشده است.",
@@ -1369,8 +1381,8 @@ FS = {
     "tab": 15, "btn_main": 16, "card_title": 15, "card_text": 14,
     "card_small": 13, "section_big": 22, "body": 15, "col_header": 13,
     "control": 15, "bound_key": 14, "row_btn": 14, "status": 13,
-    "dialog": 15, "dialog_btn": 14, "banner": 13,
-    "hint": 13,          # v22: was 11 — Link-to-Game hint text
+    "dialog": 15, "dialog_btn": 14, "banner": 13, "hint": 13,
+    "built_by": 12,
 }
 
 # =====================================================================
@@ -2114,6 +2126,7 @@ class DoKeyApp(ctk.CTk):
             self.title(t_raw("app_title"))
             self.title_label.configure(text=t("app_name"))
             self.subtitle_label.configure(text=t("app_subtitle"))
+            self.built_by_label.configure(text=t("built_by"))
             tabs = [t("tab_p1"), t("tab_p2")]
             self.tabs_bar.configure(values=tabs)
             self.tabs_bar.set(tabs[self.selected_tab])
@@ -2323,6 +2336,9 @@ class DoKeyApp(ctk.CTk):
     # =================================================================
 
     def _build_ui(self):
+        # ---------------------------------------------------------
+        # Header
+        # ---------------------------------------------------------
         header = ctk.CTkFrame(self, fg_color=P["panel"], corner_radius=0, height=84)
         header.pack(fill="x"); header.pack_propagate(False)
         self._header_frame = header
@@ -2350,6 +2366,9 @@ class DoKeyApp(ctk.CTk):
         self.lang_seg.pack(side="right", padx=(8, 0))
         self.lang_seg.set("دری" if _current_lang == "fa" else "EN")
 
+        # ---------------------------------------------------------
+        # Tabs + Start/Stop bar
+        # ---------------------------------------------------------
         bar = ctk.CTkFrame(self, fg_color=P["panel"], corner_radius=0, height=76)
         bar.pack(fill="x"); bar.pack_propagate(False)
         inner = ctk.CTkFrame(bar, fg_color="transparent")
@@ -2377,20 +2396,30 @@ class DoKeyApp(ctk.CTk):
             width=150, height=42, state="disabled")
         self.stop_btn.pack(side="right", padx=(10, 0))
 
-        # v22: Layout card now auto-sizes to its content, so it takes
-        # less vertical room and the Live Controller below has more.
+        # ---------------------------------------------------------
+        # Status bar — packed FIRST with side="bottom" so it always
+        # reserves 38 px at the bottom of the window.
+        # ---------------------------------------------------------
+        sb = ctk.CTkFrame(self, fg_color=P["panel"], corner_radius=0, height=38)
+        sb.pack(fill="x", side="bottom")
+        sb.pack_propagate(False)
+        self.status_label = ctk.CTkLabel(sb, text=t("status_ready"),
+                                         font=ctk.CTkFont(size=FS["status"]),
+                                         text_color=P["text_dim"])
+        self.status_label.pack(side="left", padx=24)
+        self.built_by_label = ctk.CTkLabel(sb, text=t("built_by"),
+                                           font=ctk.CTkFont(size=FS["built_by"]),
+                                           text_color=P["text_dim"])
+        self.built_by_label.pack(side="right", padx=24)
+
+        # ---------------------------------------------------------
+        # Content area (fills remaining vertical space above status bar)
+        # ---------------------------------------------------------
         self.top_card_wrap = ctk.CTkFrame(self, fg_color="transparent")
         self.top_card_wrap.pack(fill="x", padx=24, pady=(14, 0))
 
         self.content = ctk.CTkFrame(self, fg_color="transparent")
         self.content.pack(fill="both", expand=True, padx=24, pady=(14, 12))
-
-        sb = ctk.CTkFrame(self, fg_color=P["panel"], corner_radius=0, height=38)
-        sb.pack(fill="x", side="bottom"); sb.pack_propagate(False)
-        self.status_label = ctk.CTkLabel(sb, text=t("status_ready"),
-                                         font=ctk.CTkFont(size=FS["status"]),
-                                         text_color=P["text_dim"])
-        self.status_label.pack(side="left", padx=24)
 
     def _rebuild_top_card(self):
         for c in self.top_card_wrap.winfo_children():
@@ -2405,7 +2434,6 @@ class DoKeyApp(ctk.CTk):
         card = ctk.CTkFrame(self.top_card_wrap, fg_color=P["card"], corner_radius=14)
         card.pack(fill="both", expand=True)
 
-        # Row 1: buttons
         row1 = ctk.CTkFrame(card, fg_color="transparent")
         row1.pack(fill="x", padx=20, pady=(10, 4))
 
@@ -2459,7 +2487,6 @@ class DoKeyApp(ctk.CTk):
         self.delete_layout_btn.pack(side="left")
         if cur_disp == no_lbl: self.delete_layout_btn.configure(state="disabled")
 
-        # Row 2: hint + countdown label
         row2 = ctk.CTkFrame(card, fg_color="transparent")
         row2.pack(fill="x", padx=20, pady=(0, 10))
         ctk.CTkLabel(
@@ -2498,6 +2525,10 @@ class DoKeyApp(ctk.CTk):
         self.selected_tab = index
         self._rebuild_top_card()
         self._rebuild_tab_content()
+        if index == 0:
+            self._set_status(t("status_tab_p1"))
+        else:
+            self._set_status(t("status_tab_p2"))
 
     def _build_player1_info(self):
         card = ctk.CTkFrame(self.content, fg_color=P["card"], corner_radius=14)
@@ -2597,10 +2628,10 @@ class DoKeyApp(ctk.CTk):
         body = ctk.CTkFrame(ctl_card, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=20, pady=(8, 20))
 
-        # v22: preview panel is 500x500 (was 520x580) so the canvas
-        # and everything below fits without clipping the gamepad.
+        # v24: preview panel shrunk to 480x440 to match the new 440x340
+        # canvas. Enough room for title + hint + canvas + margin.
         preview_wrap = ctk.CTkFrame(body, fg_color=P["panel"], corner_radius=10,
-                                    width=500, height=500)
+                                    width=480, height=440)
         preview_wrap.pack(side="right", fill="y")
         preview_wrap.pack_propagate(False)
 
@@ -2670,16 +2701,16 @@ class DoKeyApp(ctk.CTk):
 
     def _start_detect(self):
         with self._state_lock: running = self._state["running"]
-        if running: self._set_status(t("status_stop_first_detect")); return
+        if running:
+            self._set_status(t("status_stop_first_detect"))
+            return
         if not self._driver_ok:
             self._set_status(t("status_driver_missing")); return
         try:
             total, builtin, external = count_keyboards()
         except Exception:
             total, builtin, external = (0, 0, 0)
-        if total < 1:
-            self._set_status(t("status_only_one_keyboard")); return
-        if external < 1:
+        if total < 1 or external < 1:
             self._set_status(t("status_only_one_keyboard")); return
         if total < 2:
             self._set_status(t("status_only_one_keyboard"))
@@ -2707,7 +2738,9 @@ class DoKeyApp(ctk.CTk):
 
     def _start_binding(self, control):
         with self._state_lock: running = self._state["running"]
-        if running: self._set_status(t("status_stop_first_bind")); return
+        if running:
+            self._set_status(t("status_stop_first_bind"))
+            return
         if self._player_device() is None:
             self._set_status(t("status_detect_first")); return
         self._cancel_all()
@@ -2895,7 +2928,7 @@ class DoKeyApp(ctk.CTk):
 # =====================================================================
 
 def main():
-    print("[DoKey] BUILD v22 — starting.")
+    print("[DoKey] BUILD v24 — starting.")
     try:
         test = vg.VX360Gamepad(); test.reset(); del test; gc.collect()
     except Exception as e:
